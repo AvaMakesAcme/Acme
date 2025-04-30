@@ -1,0 +1,49 @@
+class FormConditionalLogic {
+  constructor(form) {
+    this.form = form;
+    this.conditions = new Map();
+  }
+
+  // Add a condition rule
+  addCondition(targetField, dependentField, rule) {
+    this.conditions.set(targetField, {
+      dependentField,
+      rule
+    });
+    
+    // Add event listener to dependent field
+    this.form.querySelector(`#${dependentField}`)
+      .addEventListener('change', () => this.evaluateCondition(targetField));
+  }
+
+  // Evaluate a single condition
+  evaluateCondition(targetField) {
+    const condition = this.conditions.get(targetField);
+    const dependentElement = this.form.querySelector(`#${condition.dependentField}`);
+    const targetElement = this.form.querySelector(`#${targetField}`);
+    
+    const result = condition.rule(dependentElement.value);
+    targetElement.style.display = result ? 'block' : 'none';
+  }
+}
+
+// Usage example:
+const form = document.querySelector('#myForm');
+const logic = new FormConditionalLogic(form);
+
+// Show/hide address fields based on shipping method
+logic.addCondition('addressFields', 'shippingMethod', (value) => {
+  return value === 'physical';
+});
+
+// Show/hide payment fields based on payment type
+logic.addCondition('creditCardFields', 'paymentType', (value) => {
+  return value === 'credit';
+});
+
+// Complex nested conditions example
+logic.addCondition('specialInstructions', 'orderType', (value) => {
+  const isCustomOrder = value === 'custom';
+  const hasUrgentDelivery = document.querySelector('#urgentDelivery').checked;
+  return isCustomOrder && hasUrgentDelivery;
+});
