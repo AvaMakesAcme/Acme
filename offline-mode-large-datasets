@@ -1,0 +1,120 @@
+// storage-optimization.js
+
+class StorageOptimizer {
+  constructor() {
+    this.compressionThreshold = 1024 * 50; // 50KB
+    this.maxCacheSize = 1024 * 1024 * 10; // 10MB
+    this.cache = new LRUCache(this.maxCacheSize);
+  }
+
+  async storeData(key, data) {
+    if (this.shouldCompress(data)) {
+      data = await this.compress(data);
+    }
+    
+    // Chunk large datasets
+    if (data.length > this.compressionThreshold) {
+      return this.storeInChunks(key, data);
+    }
+    
+    return this.storeSimple(key, data);
+  }
+
+  async compress(data) {
+    const serialized = JSON.stringify(data);
+    const compressed = await compress(serialized);
+    return compressed;
+  }
+
+  shouldCompress(data) {
+    const size = new Blob([JSON.stringify(data)]).size;
+    return size > this.compressionThreshold;
+  }
+
+  async storeInChunks(key, data) {
+    const chunks = this.splitIntoChunks(data);
+    const chunkKeys = [];
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const chunkKey = `${key}_chunk_${i}`;
+      await this.storeSimple(chunkKey, chunks[i]);
+      chunkKeys.push(chunkKey);
+    }
+
+    // Store chunk metadata
+    await this.storeSimple(`${key}_meta`, {
+      isChunked: true,
+      chunks: chunkKeys,
+      timestamp: Date.now()
+    });
+
+    return chunkKeys;
+  }
+
+  splitIntoChunks(data, chunkSize = 1024 * 512) { // 512KB chunks
+    const chunks = [];
+    for (let i = 0; i < data.length; i += chunkSize) {
+      chunks.push(data.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
+  async retrieveData(key) {
+    const meta = await this.retrieveSimple(`${key}_meta`);
+    
+    if (meta?.isChunked) {
+      return this.assembleChunks(meta.chunks);
+    }
+    
+    const data = await this.retrieveSimple(key);
+    return this.decompress(data);
+  }
+
+  async assembleChunks(chunkKeys) {
+    const chunks = await Promise.all(
+      chunkKeys.map(key => this.retrieveSimple(key))
+    );
+    
+    return chunks.join('');
+  }
+
+  // Implement LRU cache for frequently accessed data
+  async storeSimple(key, data) {
+    await localStorage.setItem(key, data);
+    this.cache.set(key, data);
+  }
+
+  async retrieveSimple(key) {
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+
+    const data = await localStorage.getItem(key);
+    if (data) this.cache.set(key, data);
+    return data;
+  }
+
+  // Periodic cleanup of old data
+  async cleanupOldData(maxAge = 7 * 24 * 60 * 60 * 1000) { // 7 days
+    const keys = await this.getAllKeys();
+    const now = Date.now();
+
+    for (const key of keys) {
+      const meta = await this.retrieveSimple(`${key}_meta`);
+      if (meta && (now - meta.timestamp > maxAge)) {
+        await this.removeData(key);
+      }
+    }
+  }
+
+  async removeData(key) {
+    const meta = await this.retrieveSimple(`${key}_meta`);
+    if (meta?.isChunked) {
+      await Promise.all(meta.chunks.map(
+        chunkKey => localStorage.removeItem(chunkKey)
+      ));
+      await localStorage.removeItem(`${key}_meta`);
+    }
+    await localStorage.removeItem(key);
+    this.cache.delete(key);
+  }
+}
