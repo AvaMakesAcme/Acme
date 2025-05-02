@@ -1,0 +1,184 @@
+// network-transition-handler.js
+
+class NetworkTransitionHandler {
+  constructor() {
+    this.networkStatus = navigator.onLine;
+    this.pendingOperations = new Map();
+    this.retryDelays = [1000, 2000, 5000, 10000]; // Progressive retry delays
+    this.listeners = new Set();
+    
+    this.setupEventListeners();
+  }
+
+  setupEventListeners() {
+    window.addEventListener('online', () => this.handleNetworkChange(true));
+    window.addEventListener('offline', () => this.handleNetworkChange(false));
+    
+    // Monitor connection quality changes
+    if ('connection' in navigator) {
+      navigator.connection.addEventListener('change', 
+        () => this.handleConnectionQualityChange());
+    }
+  }
+
+  async handleNetworkChange(isOnline) {
+    this.networkStatus = isOnline;
+    
+    if (isOnline) {
+      await this.processPendingOperations();
+    } else {
+      this.pauseOperations();
+    }
+    
+    this.notifyListeners({
+      type: isOnline ? 'NETWORK_RESTORED' : 'NETWORK_LOST',
+      timestamp: Date.now()
+    });
+  }
+
+  handleConnectionQualityChange() {
+    const connection = navigator.connection;
+    const quality = {
+      type: connection.effectiveType,
+      downlink: connection.downlink,
+      rtt: connection.rtt
+    };
+
+    this.adjustOperationParameters(quality);
+    this.notifyListeners({
+      type: 'CONNECTION_QUALITY_CHANGE',
+      quality,
+      timestamp: Date.now()
+    });
+  }
+
+  adjustOperationParameters(quality) {
+    // Adjust batch sizes and intervals based on connection quality
+    switch(quality.type) {
+      case '4g':
+        this.batchSize = 50;
+        this.syncInterval = 1000;
+        break;
+      case '3g':
+        this.batchSize = 20;
+        this.syncInterval = 2000;
+        break;
+      case '2g':
+      case 'slow-2g':
+        this.batchSize = 5;
+        this.syncInterval = 5000;
+        break;
+      default:
+        this.batchSize = 10;
+        this.syncInterval = 3000;
+    }
+  }
+
+  async processPendingOperations() {
+    for (const [id, operation] of this.pendingOperations) {
+      try {
+        await this.executeOperation(operation);
+        this.pendingOperations.delete(id);
+      } catch (error) {
+        await this.handleOperationError(id, operation, error);
+      }
+    }
+  }
+
+  async executeOperation(operation) {
+    if (!this.networkStatus) {
+      throw new Error('Network unavailable');
+    }
+
+    const result = await this.executeWithTimeout(
+      operation.execute(),
+      operation.timeout || 30000
+    );
+
+    return result;
+  }
+
+  async executeWithTimeout(promise, timeout) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Operation timed out')), timeout)
+      )
+    ]);
+  }
+
+  async handleOperationError(id, operation, error) {
+    operation.attempts = (operation.attempts || 0) + 1;
+    
+    if (operation.attempts <= operation.maxRetries) {
+      const delay = this.retryDelays[operation.attempts - 1] || 
+        this.retryDelays[this.retryDelays.length - 1];
+      
+      await this.scheduleRetry(id, operation, delay);
+    } else {
+      this.handleFailedOperation(id, operation, error);
+    }
+  }
+
+  async scheduleRetry(id, operation, delay) {
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    if (this.networkStatus) {
+      this.executeOperation(operation)
+        .then(() => this.pendingOperations.delete(id))
+        .catch(error => this.handleOperationError(id, operation, error));
+    }
+  }
+
+  handleFailedOperation(id, operation, error) {
+    this.notifyListeners({
+      type: 'OPERATION_FAILED',
+      operationId: id,
+      error: error.message,
+      timestamp: Date.now()
+    });
+
+    // Move to dead letter queue for manual review
+    this.moveToDeadLetterQueue(operation, error);
+  }
+
+  pauseOperations() {
+    // Pause all active operations and save their state
+    this.activeOperations.forEach(operation => {
+      operation.pause();
+      this.pendingOperations.set(operation.id, operation);
+    });
+  }
+
+  addListener(listener) {
+    this.listeners.add(listener);
+  }
+
+  removeListener(listener) {
+    this.listeners.delete(listener);
+  }
+
+  notifyListeners(event) {
+    this.listeners.forEach(listener => listener(event));
+  }
+}
+
+// Usage example
+const networkHandler = new NetworkTransitionHandler();
+
+networkHandler.addListener((event) => {
+  switch(event.type) {
+    case 'NETWORK_LOST':
+      showOfflineNotification();
+      break;
+    case 'NETWORK_RESTORED':
+      showOnlineNotification();
+      break;
+    case 'CONNECTION_QUALITY_CHANGE':
+      updateUIForConnectionQuality(event.quality);
+      break;
+    case 'OPERATION_FAILED':
+      logOperationFailure(event);
+      break;
+  }
+});
