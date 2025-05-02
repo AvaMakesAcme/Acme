@@ -1,0 +1,190 @@
+// sync-status-feedback.js
+
+class SyncStatusFeedback {
+  constructor(options = {}) {
+    this.container = options.container || document.createElement('div');
+    this.notificationDuration = options.notificationDuration || 3000;
+    this.progressBar = this.createProgressBar();
+    this.notificationArea = this.createNotificationArea();
+    this.statusIndicator = this.createStatusIndicator();
+    
+    this.initialize();
+  }
+
+  initialize() {
+    this.container.appendChild(this.statusIndicator);
+    this.container.appendChild(this.progressBar);
+    this.container.appendChild(this.notificationArea);
+    
+    this.setupEventListeners();
+  }
+
+  createStatusIndicator() {
+    const indicator = document.createElement('div');
+    indicator.className = 'sync-status-indicator';
+    return indicator;
+  }
+
+  createProgressBar() {
+    const progressContainer = document.createElement('div');
+    progressContainer.className = 'sync-progress-container';
+    
+    const progressBar = document.createElement('div');
+    progressBar.className = 'sync-progress-bar';
+    
+    progressContainer.appendChild(progressBar);
+    return progressContainer;
+  }
+
+  createNotificationArea() {
+    const area = document.createElement('div');
+    area.className = 'sync-notification-area';
+    return area;
+  }
+
+  setupEventListeners() {
+    window.addEventListener('sync-started', () => this.handleSyncStart());
+    window.addEventListener('sync-progress', (e) => this.handleSyncProgress(e.detail));
+    window.addEventListener('sync-completed', () => this.handleSyncComplete());
+    window.addEventListener('sync-error', (e) => this.handleSyncError(e.detail));
+  }
+
+  handleSyncStart() {
+    this.updateStatus('syncing');
+    this.showNotification('Sync started', 'info');
+    this.updateProgressBar(0);
+  }
+
+  handleSyncProgress(detail) {
+    const { completed, total, currentItem } = detail;
+    const percentage = (completed / total) * 100;
+    
+    this.updateProgressBar(percentage);
+    this.updateStatusText(`Syncing: ${completed}/${total} items`);
+    
+    if (currentItem) {
+      this.showNotification(`Syncing: ${currentItem.name}`, 'info');
+    }
+  }
+
+  handleSyncComplete() {
+    this.updateStatus('complete');
+    this.showNotification('Sync completed successfully', 'success');
+    this.updateProgressBar(100);
+    
+    setTimeout(() => {
+      this.resetUI();
+    }, this.notificationDuration);
+  }
+
+  handleSyncError(error) {
+    this.updateStatus('error');
+    this.showNotification(`Sync error: ${error.message}`, 'error');
+    this.updateProgressBar(0);
+  }
+
+  updateStatus(status) {
+    this.statusIndicator.setAttribute('data-status', status);
+    this.statusIndicator.className = `sync-status-indicator status-${status}`;
+  }
+
+  updateStatusText(text) {
+    this.statusIndicator.textContent = text;
+  }
+
+  updateProgressBar(percentage) {
+    this.progressBar.querySelector('.sync-progress-bar').style.width = `${percentage}%`;
+  }
+
+  showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `sync-notification notification-${type}`;
+    notification.textContent = message;
+    
+    this.notificationArea.appendChild(notification);
+    
+    setTimeout(() => {
+      notification.classList.add('fade-out');
+      setTimeout(() => {
+        notification.remove();
+      }, 300);
+    }, this.notificationDuration);
+  }
+
+  resetUI() {
+    this.updateProgressBar(0);
+    this.updateStatus('idle');
+    this.updateStatusText('');
+    this.notificationArea.innerHTML = '';
+  }
+}
+
+// CSS Styles
+const styles = `
+  .sync-status-indicator {
+    padding: 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+
+  .status-syncing {
+    background-color: #007bff;
+    color: white;
+  }
+
+  .status-complete {
+    background-color: #28a745;
+    color: white;
+  }
+
+  .status-error {
+    background-color: #dc3545;
+    color: white;
+  }
+
+  .sync-progress-container {
+    height: 4px;
+    background-color: #e9ecef;
+    border-radius: 2px;
+    margin-bottom: 8px;
+  }
+
+  .sync-progress-bar {
+    height: 100%;
+    background-color: #007bff;
+    border-radius: 2px;
+    transition: width 0.3s ease;
+  }
+
+  .sync-notification {
+    padding: 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    animation: fadeIn 0.3s ease;
+  }
+
+  .notification-info {
+    background-color: #cce5ff;
+    border: 1px solid #b8daff;
+  }
+
+  .notification-success {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+  }
+
+  .notification-error {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+  }
+
+  .fade-out {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+`;
