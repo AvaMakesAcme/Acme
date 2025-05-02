@@ -1,0 +1,173 @@
+// progressive-sync.js
+
+class ProgressiveSync {
+  constructor(options = {}) {
+    this.batchSize = options.batchSize || 50;
+    this.priorityThreshold = options.priorityThreshold || 0.8;
+    this.syncInterval = options.syncInterval || 5000;
+    this.priorityQueue = new PriorityQueue();
+    this.syncing = false;
+  }
+
+  async startSync() {
+    if (this.syncing) return;
+    this.syncing = true;
+
+    try {
+      // First sync high-priority items
+      await this.syncPriorityItems();
+      
+      // Then process regular queue in batches
+      await this.processBatches();
+    } finally {
+      this.syncing = false;
+    }
+  }
+
+  async syncPriorityItems() {
+    const highPriorityItems = this.priorityQueue
+      .filter(item => item.priority >= this.priorityThreshold);
+
+    for (const item of highPriorityItems) {
+      try {
+        await this.syncItem(item);
+        this.priorityQueue.remove(item);
+      } catch (error) {
+        console.error('Failed to sync priority item:', error);
+        item.retryCount = (item.retryCount || 0) + 1;
+      }
+    }
+  }
+
+  async processBatches() {
+    let items = this.priorityQueue.getItems();
+    
+    while (items.length > 0) {
+      const batch = items.slice(0, this.batchSize);
+      
+      await Promise.all(
+        batch.map(item => 
+          this.syncItem(item)
+            .then(() => this.priorityQueue.remove(item))
+            .catch(error => {
+              console.error('Failed to sync item:', error);
+              item.retryCount = (item.retryCount || 0) + 1;
+              
+              if (item.retryCount > 3) {
+                this.moveToDeadLetterQueue(item);
+              }
+            })
+        )
+      );
+
+      // Wait before processing next batch
+      await new Promise(resolve => setTimeout(resolve, this.syncInterval));
+      
+      items = this.priorityQueue.getItems();
+    }
+  }
+
+  async syncItem(item) {
+    const syncStartTime = Date.now();
+    
+    // Update progress
+    this.emit('syncProgress', {
+      item,
+      status: 'syncing',
+      progress: this.calculateProgress()
+    });
+
+    try {
+      await this.performSync(item);
+      
+      this.emit('syncProgress', {
+        item,
+        status: 'completed',
+        progress: this.calculateProgress()
+      });
+
+      // Update sync metadata
+      await this.updateSyncMetadata(item, {
+        lastSync: Date.now(),
+        syncDuration: Date.now() - syncStartTime,
+        status: 'success'
+      });
+
+    } catch (error) {
+      this.emit('syncProgress', {
+        item,
+        status: 'error',
+        error,
+        progress: this.calculateProgress()
+      });
+      throw error;
+    }
+  }
+
+  calculateItemPriority(item) {
+    const factors = {
+      age: 0.4,         // Older items get higher priority
+      size: 0.2,        // Smaller items get higher priority
+      retries: 0.2,     // Fewer retries get higher priority
+      importance: 0.2   // User-defined importance
+    };
+
+    const age = this.calculateAgeFactor(item.timestamp);
+    const size = this.calculateSizeFactor(item.size);
+    const retries = this.calculateRetriesFactor(item.retryCount);
+    const importance = item.importance || 0.5;
+
+    return (
+      age * factors.age +
+      size * factors.size +
+      retries * factors.retries +
+      importance * factors.importance
+    );
+  }
+
+  calculateProgress() {
+    const total = this.priorityQueue.initialSize;
+    const remaining = this.priorityQueue.size;
+    return (total - remaining) / total;
+  }
+
+  async moveToDeadLetterQueue(item) {
+    await this.deadLetterQueue.add({
+      item,
+      error: item.lastError,
+      retryCount: item.retryCount,
+      timestamp: Date.now()
+    });
+    
+    this.priorityQueue.remove(item);
+  }
+
+  // Helper methods for priority calculation
+  calculateAgeFactor(timestamp) {
+    const age = Date.now() - timestamp;
+    const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+    return Math.min(age / maxAge, 1);
+  }
+
+  calculateSizeFactor(size) {
+    const maxSize = 1024 * 1024; // 1MB
+    return 1 - Math.min(size / maxSize, 1);
+  }
+
+  calculateRetriesFactor(retries = 0) {
+    return 1 - (retries / 3);
+  }
+}
+
+// Usage example
+const progressiveSync = new ProgressiveSync({
+  batchSize: 50,
+  priorityThreshold: 0.8,
+  syncInterval: 5000
+});
+
+progressiveSync.on('syncProgress', (progress) => {
+  console.log(`Sync progress: ${Math.round(progress.progress * 100)}%`);
+});
+
+await progressiveSync.startSync();
