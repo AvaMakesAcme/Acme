@@ -1,0 +1,97 @@
+// File Upload Handler Class
+class FileUploadHandler {
+  constructor(config) {
+    this.maxFileSize = config.maxFileSize || 5 * 1024 * 1024; // 5MB default
+    this.allowedTypes = config.allowedTypes || ['image/*', 'application/pdf'];
+    this.uploadUrl = config.uploadUrl;
+    this.onProgress = config.onProgress || (() => {});
+  }
+
+  // Validate file before upload
+  validateFile(file) {
+    if (file.size > this.maxFileSize) {
+      throw new Error('File size exceeds limit');
+    }
+    
+    const fileType = file.type;
+    const isAllowed = this.allowedTypes.some(type => {
+      if (type.endsWith('/*')) {
+        return fileType.startsWith(type.slice(0, -2));
+      }
+      return type === fileType;
+    });
+
+    if (!isAllowed) {
+      throw new Error('File type not supported');
+    }
+    
+    return true;
+  }
+
+  // Handle file upload with progress
+  async uploadFile(file) {
+    try {
+      this.validateFile(file);
+      
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(this.uploadUrl, {
+        method: 'POST',
+        body: formData,
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round(
+            (progressEvent.loaded * 100) / progressEvent.total
+          );
+          this.onProgress(percentCompleted);
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Upload error:', error);
+      throw error;
+    }
+  }
+
+  // Handle multiple file uploads
+  async uploadMultipleFiles(files) {
+    const uploads = Array.from(files).map(file => this.uploadFile(file));
+    return Promise.all(uploads);
+  }
+}
+
+// Usage Example
+const uploadHandler = new FileUploadHandler({
+  maxFileSize: 10 * 1024 * 1024, // 10MB
+  allowedTypes: ['image/jpeg', 'image/png', 'application/pdf'],
+  uploadUrl: '/api/upload',
+  onProgress: (percent) => {
+    updateProgressBar(percent);
+  }
+});
+
+// File input event listener
+document.querySelector('#fileInput').addEventListener('change', async (event) => {
+  const files = event.target.files;
+  try {
+    const results = await uploadHandler.uploadMultipleFiles(files);
+    console.log('Upload successful:', results);
+  } catch (error) {
+    console.error('Upload failed:', error);
+  }
+});
+
+// Progress bar update function
+function updateProgressBar(percent) {
+  const progressBar = document.querySelector('.progress-bar');
+  progressBar.style.width = `${percent}%`;
+  progressBar.setAttribute('aria-valuenow', percent);
+}
